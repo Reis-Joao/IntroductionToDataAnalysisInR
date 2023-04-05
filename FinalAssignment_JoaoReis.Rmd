@@ -6,6 +6,20 @@ date: "2023-04-05"
 ---
 
 ```{r Libraries,include = FALSE, message=FALSE, echo=FALSE}
+
+# In case of need
+# install.packages("dplyr")
+# install.packages("tidyverse")
+# install.packages("ggplot2")
+# install.packages("scales")
+# install.packages("cowplot")
+# install.packages("plm")
+# install.packages("texreg")
+# install.packages("mgcv")
+# install.packages("maps")
+# install.packages("patchwork")
+# install.packages("gridExtra")
+
 library(dplyr)
 library(tidyverse)
 library(ggplot2)
