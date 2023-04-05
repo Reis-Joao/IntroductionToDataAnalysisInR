@@ -1,0 +1,910 @@
+---
+title: "Investigating the Correlation between Government Measures, Smoking and the Evolution of the Pandemic"
+subtitle: "Final Assignment: João Reis"
+output: html_document
+date: "2023-04-05"
+---
+
+```{r Libraries,include = FALSE, message=FALSE, echo=FALSE}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(cowplot)
+library(plm)
+library(texreg)
+library(mgcv)
+library(maps)
+library(patchwork)
+library(gridExtra)
+```
+# **GitHub**
+
+The present work is available for access at: <https://github.com/Reis-Joao/IntroductionToDataAnalysisInR>.
+
+# **1. Executive Summary**
+
+The COVID-19 pandemic broke out in 2020 and disrupted social and economic relations that were previously taken for granted. As a completely new crisis, no one was prepared to address its impact on both health and the economy, which was significant and far-reaching.
+
+Many researchers came together to study the pandemic at all levels, and a significant amount of effort was dedicated to data collection. Governments around the world also put in extra work to monitor the pandemic situation, resulting in an unprecedented amount of data being available for research. One such example of this is the data collected by **"Our World in Data"**.[[1]](https://ourworldindata.org/coronavirus#explore-the-global-situation)
+
+The purpose of this study is to examine the correlation between government measures and the evolution of the pandemic, as well as the correlation between the share of smokers in a country and the incidence of COVID-19 cases and deaths.
+
+The study will be divided as following: In Section 2, a summary of the raw data will be presented. In Section 3, data cleaning will be performed to prepare the data for analysis. Section 4 will present the analysis of the data, including statistical tests and graphs. One piece of code will be presented and described in detail in Section 5.
+
+# **2. Raw Data Summary**
+
+In this section, I start by requesting the CSV data file directly from the website, which facilitates importing the most current version of the data. Additionally, this approach enables other individuals to access the data directly through the code, without the need to download it separately.
+
+```{r setup, include=FALSE}
+
+# URL of the file to download
+url <- "https://covid.ourworldindata.org/data/owid-covid-data.csv"
+
+# Download the file and save it in the current working directory
+download.file(url, destfile = "owid-covid-data.csv", mode = "wb")
+
+# Read in the CSV file using read.csv
+df <- read.csv("owid-covid-data.csv")
+
+```
+
+The database comprises 67 columns, encompassing a broad range of information. The first three columns serve as country identifiers (i.e., iso_code, continent, and name), while the fourth column indicates the date of the observation. The remaining columns contain a mixture of COVID-related data and relevant country-specific characteristics (such as health facilities, population, disease prevalence, etc.), which are of importance for the analysis.
+
+```{r Dataset rows and columns, echo=FALSE}
+
+# Getting the number of rows and columns
+num_rows <- nrow(df)
+num_cols <- ncol(df)
+
+# Printing it
+cat("The dataset has", num_cols, "columns and", num_rows, "rows.\n")
+
+```
+
+The columns are:
+
+```{r Dataset columns, echo=FALSE}
+
+# Printing the columns (variables) names
+data.frame(colnames(df))
+
+```
+
+Accessing the **GitHub** [[2]](https://github.com/owid/covid-19-data/tree/master/public/data) of the authors is recommended for obtaining detailed information about the database, including descriptions of each variable and other pertinent details (such as source and coverage of each group of variables).
+
+# **3. Data Cleaning**
+
+The database used in this project boasts an impressive coverage and length, featuring numerous variables and a vast sample of countries. However, some data cleaning is necessary to streamline further analysis. While the authors have done an excellent job providing a clean and workable dataset, some modifications are needed for this particular project.
+
+As part of my analysis, I intend to focus on a specific time period characterized by a higher incidence of Covid, when cases were more frequent and government measures were implemented. To achieve this, I will first conduct a thorough inspection of the 'date' column in the dataset, followed by an examination of the observation grouping. Finally, I will perform data cleaning to obtain only the desired observations within the desired time period.
+
+## 3.1 Dates
+
+The dataset contains observations from January 1, 2020 until the current date.
+
+```{r, include=FALSE, echo=FALSE}
+
+# Arrange them by ascendent and descendent order to observe first and last day of observation
+arrange(df, date)
+arrange(df, desc(date))
+
+```
+
+As part of the analysis, the format of the "date" column needs to be manipulated. The column appears as a character type, but for easier manipulation and calculation of dates, it would be best to store it as a date type. This will allow for the use of functions such as month(), year(), weekdays(), among others. Therefore, to achieve this, the first step is to confirm that all dates are stored in the same format, namely "yyyy-mm-dd". Once confirmed, the column will be converted to a date type. Additionally, I have created three additional columns in the dataset to store the year, month, and day of the observation, respectively. 
+
+```{r, echo=FALSE}
+
+# Checking if all date observations follow the same pattern
+cat("Do all the observations in 'date' follow the pattern 'yyyy-mm-dd'?", all(grepl("\\d{4}-\\d{2}-\\d{2}", df$date)))
+
+```
+
+```{r, include=FALSE, echo=FALSE}
+
+# Transforming the column date into Date type
+df$date <- as.Date(df$date)
+
+```
+
+```{r, include=FALSE, echo=FALSE}
+
+# Create year, month and day columns
+df <- df %>%
+  mutate(year = lubridate::year(date),
+         month = lubridate::month(date),
+         day = lubridate::day(date)) %>%
+  select(iso_code, continent, location, date, year, month, day, everything())
+
+```
+
+```{r, echo=FALSE}
+
+# Printing the first rows of the dataset with the new columns to check whether it worked
+head(df %>% select(iso_code, continent, location, date, year, month, day))
+
+```
+
+## 3.2 Level of Observation
+
+To ensure a meaningful country analysis and avoid comparing different political entities, it is important to identify which observations are present. As explained in the documentation available on the authors' GitHub, regions that do not represent countries, but were defined by the "Our World in Data" team (such as continents, high/low-income groupings of countries, and political organizations), are prefixed with "OWID_" in their iso_code.
+
+```{r ISO_Code, echo=FALSE}
+
+# Checking the unique iso_codes in the data to drop the non-relevant
+unique(df$iso_code)
+
+```
+
+Although the groups defined by the "Our World in Data" team are very interesting and useful for certain types of analysis (especially if one is looking for causality), they might not be very relevant for my project and could introduce some issues in the study, such as double-counting certain regions and giving more weight to specific countries. Therefore, I create a new database that excludes these observations. The unique observations are the following:
+
+```{r Countries, message=FALSE, echo=FALSE}
+
+# Droping the non-relevant observations
+df_countries <- subset(df, !grepl("^OWID_", iso_code))
+
+# Printing the countries left in the dataset
+df_countries %>%
+  distinct(iso_code, location) %>%
+  select(iso_code, location)
+
+```
+
+## 3.3 Time Span
+
+As mentioned earlier, the entire period of data collection is not relevant for my analysis. Instead, I am interested in the period when the COVID-19 pandemic had a significant impact and when government responses were more robust. Therefore, to determine the relevant period to cover, I will generate several graphs.
+
+Firstly, I will plot the daily new cases per continent over time to identify where and when COVID-19 had the greatest spread.
+
+```{r Covid Incidence New Cases, message=FALSE, echo=FALSE, fig.width=10, fig.height=6, fig.align = "center"}
+
+# Aggregate new_cases by continent and date
+df_newcases <- aggregate(new_cases ~ continent + date, data = df_countries, sum, na.action = na.omit)
+
+# Create the plot
+ggplot(df_newcases, aes(x = date, y = new_cases, color = continent)) +
+  geom_line(linewidth=0.6) +
+  scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6), breaks = seq(0, max(df_newcases$new_cases), by = 1e6))+
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
+  labs(x = "Date", y = "New Cases (millions)", color = "Continent") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+        panel.grid.major.x = element_line(linewidth = 0.1, color = "grey80", linetype = "dotted"),
+        panel.grid.major.y = element_line(linewidth = 0.2, color = "grey80", linetype = "dashed"))
+
+ggsave("CovidIncidenceNewCases.png")
+
+```
+In December 2022, there was a huge peak in new cases in Asia, which appears to be an abnormal situation and affects the quality of the plot by skewing down all the other observations.To address such anomaly, I have plotted the same graph for observations until November 2022.
+
+```{r Covid Incidence New Cases without 2023,message=FALSE, echo=FALSE, fig.width=10, fig.height=6, fig.align = "center"}
+
+# Aggregate new_cases by continent and date
+df_newcases_until2022 <- aggregate(new_cases ~ continent + date, data = df_countries, sum, na.action = na.omit)
+
+# Filter data frame to keep observations until 2022-12-31
+df_newcases_until2022 <- filter(df_newcases, date <= as.Date("2022-11-30"))
+
+# Create the plot
+ggplot(df_newcases_until2022, aes(x = date, y = new_cases, color = continent)) +
+  geom_line(linewidth=0.6) +
+  scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6), breaks = seq(0, 2e6, by = 0.5e6)) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
+  labs(x = "Date", y = "New Cases (millions)", color = "Continent") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+        panel.grid.major.x = element_line(linewidth = 0.1, color = "grey80", linetype = "dotted"),
+        panel.grid.major.y = element_line(linewidth = 0.2, color = "grey80", linetype = "dashed"))
+
+ggsave("CovidIncidenceNewCaseswithout2023.png")
+
+```
+As demonstrated by the previous graph, the pandemic reached its peak in terms of cases during the 2022 (particularly in its beggining), with minor variations across continents. However, this surge in cases could be attributed to an increase in testing during this period. Additionally, with the widespread availability of vaccines over time, mortality rates may not have followed the same trend. To investigate this further, a new graph will be plotted, using new daily deaths on the y-axis, rather than new daily cases.
+
+```{r Covid Incidence New Deaths, message=FALSE, echo=FALSE, fig.width=10, fig.height=6, fig.align = "center"}
+
+# Aggregate new_deaths by continent and date
+df_newdeaths <- aggregate(new_deaths ~ continent + date, data = df_countries, sum, na.action = na.omit)
+
+# Create the plot
+ggplot(df_newdeaths, aes(x = date, y = new_deaths, color = continent)) +
+  geom_line(linewidth=0.6) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
+  labs(x = "Date", y = "New Deaths", color = "Continent") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+        panel.grid.major.x = element_line(linewidth = 0.1, color = "grey80", linetype = "dotted"),
+        panel.grid.major.y = element_line(linewidth = 0.2, color = "grey80", linetype = "dashed"))
+
+ggsave("CovidIncidenceNewDeaths.png")
+
+```
+The preceding graph demonstrates that deaths from COVID-19 were distributed more evenly over time, with a pronounced decrease from April 2022 onward. This pattern is consistent across all continents, with some regional variations. While North America and Asia saw a rise in new daily deaths in late 2022 and early 2023, it was not as anomalous as the spike in new cases. Notably, both Oceania and Africa reported low numbers of daily deaths. In Oceania, this may be attributed to its relatively small population and the ease of isolation measures. However, in Africa, it may be attributed to a lack of accurate reporting by official entities, leading to many COVID-19 cases and deaths going unreported.
+
+Finally, for the interest of our analysis, I plot the same graph but to check the evolution of the stringency index, that consists of a "composite measure based on 9 response indicators including school closures, workplace closures, and travel bans, rescaled to a value from 0 to 100". I use the average per continent, for the ease of visual interpretation, and since the goal is simply to have a general idea of how measures evoluted over time.
+
+As a final step in our data cleaning process, we plot the evolution of the stringency index across continents. The stringency index is a composite measure based on 9 response indicators, such as school closures, workplace closures, and travel bans, rescaled to a value from 0 to 100. This index provides a general idea of how government measures evolved over time. We use the average value per continent for ease of visual interpretation. 
+
+```{r Stringency Index Continent Average,message=FALSE, echo=FALSE, fig.width=10, fig.height=6, fig.align = "center"}
+
+# Aggregate the average of stringency_index by continent and date 
+df_stringencyindex <- aggregate(stringency_index ~ continent + date, data = df_countries, mean, na.action = na.omit)
+
+# Create the plot
+ggplot(df_stringencyindex, aes(x = date, y = stringency_index, color = continent)) +
+  geom_line(linewidth=0.8) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10))+
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
+  labs(x = "Date", y = "Stringency Index", color = "Continent") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+        panel.grid.major.x = element_line(linewidth = 0.1, color = "grey80", linetype = "dotted"),
+        panel.grid.major.y = element_line(linewidth = 0.2, color = "grey80", linetype = "dashed"))
+
+ggsave("StringencyIndexContinentAverage.png")
+
+```
+The analysis of the previous graph reveals that in the initial stage of the pandemic, governments rapidly imposed measures, which peaked at almost 90 out of 100 in the middle of 2020 and then gradually declined. The peak was observed across all continents, followed by a gradual opening that began in 2022, with the exception of a small peak in Oceania at the beginning of that year. However, the evolution of measures between the second half of 2020 and the end of 2021 slightly diverged across continents, although the general pattern remained similar worldwide.
+
+Based on these findings, a decision has been made to work with a sample from the beginning of 2020 to November 2022, covering the most active period of the pandemic while excluding the most recent period where COVID-19 is no longer a primary concern, and where the quality and coverage of reported data appear to have decreased. However, this choice may be subject to questioning, and the analysis can be extended to other time periods as deemed appropriate.
+
+```{r Final Sample, include=FALSE, echo=FALSE}
+
+# Dropping observations outside the date range of interest
+df_finalsample <- df_countries %>%
+  filter(date >= as.Date("2020-01-01") & date <= as.Date("2022-11-30"))
+
+```
+
+## 3.4 Panel Dataset
+
+In order to prepare the data for analysis, it is essential to transform the data frame into panel data due to the involvement of multiple subjects (i.e., countries) observed over time. To achieve this, the final step in data cleaning involves the creation of a new column called "id," which consists of the name of the country and the date of observation. The purpose of this column is to check for any duplicate combinations. Since each combination of country and date is unique, the data set is ready to be transformed into panel data.
+
+```{r Panel Data Transformation, include=FALSE, echo=FALSE}
+
+# Create a unique identifier for each observation
+df_finalsample$id <- paste(df_finalsample$location, df_finalsample$date, sep = "_")
+
+# Check for duplicates
+any(duplicated(df_finalsample$id))
+
+# Turning the dataset into a pandel data
+df_finalsample <- pdata.frame(df_finalsample,index = c('location', 'date'))
+
+```
+
+In Panel Data analysis, a critical aspect to consider is the balance of the panel. To assess panel balance, a table is constructed with each country as a row and years 2020, 2021, and 2022 as columns, indicating the number of observations for each country in each year. An unbalanced panel may pose significant problems in analysis; however, a check on the panel balance reveals only seven countries were unbalanced in 2020, two in 2021, and one in 2022. As this number is relatively small, I decided to drop these countries (i.e., Argentina, Hong Kong, Macao, Mexico, Suriname, Taiwan, and Western Sahara) from the analysis.
+
+```{r Balancing Observation,include=FALSE, echo=FALSE}
+
+# Checking for the balance of the dataset - unbalanced
+obs_table <- table(df_finalsample$location, df_finalsample$year) 
+
+obs_table
+
+```
+
+```{r Balancing the Panel, echo=FALSE}
+
+# Get countries with different number of observations in 2020
+unbalanced_2020 <- names(which(obs_table[, "2020"] != 364))
+
+cat("Unbalanced observations in 2020:", unbalanced_2020, "\n")
+
+# Get countries with different number of observations in 2021
+unbalanced_2021 <- names(which(obs_table[, "2021"] != 365))
+
+cat("Unbalanced observations in 2021:", unbalanced_2021, "\n")
+
+# Get countries with different number of observations in 2022
+unbalanced_2022 <- names(which(obs_table[, "2022"] != 334))
+
+cat("Unbalanced observations in 2022:", unbalanced_2022)
+
+# Get a vector of country names to be excluded
+countries_to_exclude <- c(unbalanced_2020, unbalanced_2021, unbalanced_2022)
+
+# Subset the df_finalsample dataset to exclude the countries
+df_finalsample <- df_finalsample[!(df_finalsample$location %in% countries_to_exclude),]
+
+```
+```{r Final Workable Dataset Information, include=FALSE, echo=FALSE}
+
+# Info about the columns type 
+sapply(df_finalsample, class)
+
+```
+
+After thoroughly examining the final dataframe, we can observe that all variables are of the expected type, except for the "date" column. During the process of transforming the dataset into panel data, the "date" column was converted to the "factor" type. To rectify this, the code was re-run to transform the "date" column back into the appropriate "Date" type. The final dataset now appears as follows:
+
+```{r Changing Date column type, include=FALSE, echo=FALSE}
+
+# Turning the column date into date type again
+df_finalsample$date <- as.Date(df_finalsample$date)
+
+```
+
+```{r Final Dataset Overview, include=FALSE, echo=FALSE}
+
+# Info about the columns type with first observations shown
+glimpse(df_finalsample)
+
+```
+
+```{r Final Dataset Columns Overview, echo=FALSE}
+
+# Info about the columns type 
+sapply(df_finalsample, class)
+
+```
+A final aspect worth noting is the presence of NAs in the dataset. It should be noted that the missing values in the dataset are legitimate entries, as several variables could not be observed for each country at every time point due to their inherent nature. While these factors must be considered during the analysis, they do not compromise the overall quality and cleanliness of the data.
+
+
+# **4. Data Exploration**
+
+## 4.1 Stringency Index
+
+Having established the final dataset, the analysis of interest can now commence. The initial focus is on investigating the correlation between government measures and the evolution of the pandemic. The relationship between science and politics during the pandemic has been one of the most controversial aspects. Due to the virus's novelty, a broad range of measures were implemented, with some individuals arguing that they were essential, while others disputed their scientific basis. Without making any causality arguments, the aim is to explore whether a correlation exists between more restrictive measures and better pandemic outcomes.
+
+To begin, the evolution of the stringency index is examined geographically over time. The previous analysis presented a scatter plot depicting the daily evolution of the stringency index grouped by continent. The present analysis focuses on the distribution of the stringency index by country at certain points in time.
+
+```{r Map Strigency Index 1st January 2021,include=FALSE, echo=FALSE}
+
+# Filter data for 31/12/2021
+df_filtered_map <- df_finalsample %>% 
+  filter(date == "2020-06-01")
+
+# Importing the data of the world map
+world <- map_data("world")
+
+# Merge my data and the map data
+df_map <- world %>%
+  left_join(df_filtered_map, by = c("region" = "location"))
+
+# Create plot
+map_SI_june2020 <- ggplot(df_map, aes(x = long, y = lat, group = group, fill = stringency_index)) +
+  geom_polygon(color = "black",  linewidth = 0.1) +
+  scale_fill_gradient(low = "green", high = "red",name = "Strigency Index", limits = c(1, 100)) +
+  theme_void() +
+  ggtitle("Strigency Index 1st June 2020") +
+  theme(plot.title = element_text(hjust = 0.6), legend.position = "right")
+
+map_SI_june2020
+
+```
+
+```{r Map Strigency Index 1st June 2021,include=FALSE, echo=FALSE}
+
+# Filter data for 31/12/2021
+df_filtered_map <- df_finalsample %>% 
+  filter(date == "2021-06-01")
+
+# Merge my data and the map data
+df_map <- world %>%
+  left_join(df_filtered_map, by = c("region" = "location"))
+
+# Create plot
+map_SI_june2021 <- ggplot(df_map, aes(x = long, y = lat, group = group, fill = stringency_index)) +
+  geom_polygon(color = "black",  linewidth = 0.1) +
+  scale_fill_gradient(low = "green", high = "red", name = "Strigency Index", limits = c(1, 100)) +
+  theme_void() +
+  ggtitle("Strigency Index 1st June 2021") +
+  theme(plot.title = element_text(hjust = 0.6), legend.position = "right")
+
+map_SI_june2021
+
+```
+
+```{r Map Strigency Index 1st January 2022,include=FALSE, echo=FALSE}
+
+# Filter data for 31/12/2021
+df_filtered_map <- df_finalsample %>% 
+  filter(date == "2022-01-01")
+
+# Merge my data and the map data
+df_map <- world %>%
+  left_join(df_filtered_map, by = c("region" = "location"))
+
+# Create plot
+map_SI_january2022 <- ggplot(df_map, aes(x = long, y = lat, group = group, fill = stringency_index)) +
+  geom_polygon(color = "black",  linewidth = 0.1) +
+  scale_fill_gradient(low = "green", high = "red", name = "Strigency Index", limits = c(1, 100)) +
+  theme_void() +
+  ggtitle("Strigency Index 1st January 2022") +
+  theme(plot.title = element_text(hjust = 0.6), legend.position = "right")
+
+map_SI_january2022
+
+```
+
+```{r Map Strigency Index 30th November 2022,include=FALSE, echo=FALSE}
+
+# Filter data for 31/12/2021
+df_filtered_map <- df_finalsample %>% 
+  filter(date == "2022-11-30")
+
+# Merge my data and the map data
+df_map <- world %>%
+  left_join(df_filtered_map, by = c("region" = "location"))
+
+# Create plot
+map_SI_November2022 <- ggplot(df_map, aes(x = long, y = lat, group = group, fill = stringency_index)) +
+  geom_polygon(color = "black",  linewidth = 0.1) +
+  scale_fill_gradient(low = "green", high = "red", name = "Strigency Index", limits = c(1, 100)) +
+  theme_void() +
+  ggtitle("Strigency Index 30th November 2022") +
+  theme(plot.title = element_text(hjust = 0.6), legend.position = "right")
+
+map_SI_November2022
+
+```
+
+```{r Grid Maps Strigency Index, message=FALSE, echo=FALSE, fig.width=10, fig.height=6, fig.align = "center"}
+
+# Combine plots into one grid
+plot_grid(map_SI_june2020, map_SI_june2021, map_SI_january2022, map_SI_November2022, nrow = 2)
+
+ggsave("GridMapsStrigencyIndex.png")
+
+```
+As evidenced by the previous plot, the measures taken were significant at the outset, with a gradual relaxation over time. On 1st January 2020, there were generalized high values of the stringency index, with almost every country on every continent adopting numerous measures to combat the pandemic. One year later, the situation had slightly changed, with some countries relaxing their measures while others maintained stricter policies. The map highlights the less strict rules in many African, Middle Eastern, and South American countries, as well as in Russia. Conversely, Australia had more stringent regulations, while Europe appears to have maintained more or less the same political measures. In the first month of 2022, a general easing of the measures was already evident, and on the final day of the sample, very low levels of the stringency index were observed, with the exception of China. Overall, these images effectively capture the worldwide evolution of the pandemic and how different regions adopted different measures at different times, despite the expected international trend when confronting a global pandemic.
+
+Now that there is an understanding of how the stringency index evolved over time and geographically, the focus turns to examining the relationship between this index and both new daily cases and deaths.
+
+```{r Stringency Index New Cases and Deaths,message=FALSE,echo=FALSE,fig.width=10, fig.height=10, fig.align = "center"}
+require(ggplot2)
+
+# Filtering the NAs to avoid messages from R while plotting the graph
+df_plot1 <- df_finalsample %>% 
+  filter(!is.na(stringency_index), !is.na(new_cases))
+
+# Filtering the NAs to avoid messages from R while plotting the graph
+df_plot2 <- df_finalsample %>% 
+  filter(!is.na(stringency_index), !is.na(new_deaths))
+
+# Create Plot 1
+plot1 <- ggplot(df_plot1, aes(x = stringency_index, y = new_cases)) +
+  geom_point(stat='identity', position='identity', aes(colour=continent),size=0.8) +
+  scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6), breaks = seq(0, 2e6, by = 0.5e6)) +
+  labs(x = "Stringency Index", y = "New Cases") +
+  ggtitle("Stringency Index and New Daily Cases") +
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "none")
+
+#plot1
+
+# Create Plot 1
+plot2 <- ggplot(df_plot2, aes(x = stringency_index, y = new_deaths)) +
+  geom_point(stat='identity', position='identity', aes(colour=continent),size=0.8) +
+  labs(x = "Stringency Index", y = "New Deaths") +
+  ggtitle("Stringency Index and New Daily Deaths") +
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "right")
+
+#plot2
+
+# Combine plots into one grid
+plot_grid(plot1, plot2, nrow = 2)
+
+ggsave("StringencyIndexNewCasesNewDeaths.png")
+
+```
+
+From the two graphs plotted above, it is evident that there seems to be no correlation between the stringency index and the new daily cases and deaths. However, it is important to consider that there may be confounding factors that could explain this lack of correlation. For instance, closure measures were immediately implemented at the onset of the pandemic, and they were gradually reduced as more was learned about the virus, allowing for alternative measures to be taken. As a result, it is possible that fewer cases and deaths occurred simply because scientific knowledge of the virus had improved by the time restrictions were lifted, rather than due to the effectiveness (or lack of it) of the restrictions themselves.
+
+Another way to measure this correlation is through a simple linear regression. The results come as following:
+
+```{r cases_stringency_2020,include=FALSE,echo=FALSE}
+
+# Fit linear model for year 2020.
+cases_stringency_2020 <- plm(new_cases ~ stringency_index, data = df_finalsample[df_finalsample$year == 2020, ], model = "within", effect = "twoways")
+
+# View model summary
+summary(cases_stringency_2020)
+
+```
+
+```{r cases_stringency_2021,include=FALSE,echo=FALSE}
+
+# Fit linear model for year 2021.
+cases_stringency_2021 <- plm(new_cases ~ stringency_index, data = df_finalsample[df_finalsample$year == 2021, ], model = "within", effect = "twoways")
+
+# View model summary
+summary(cases_stringency_2021)
+
+```
+
+```{r cases_stringency_2022,include=FALSE,echo=FALSE}
+
+# Fit linear model for year 2022.
+cases_stringency_2022 <- plm(new_cases ~ stringency_index, data = df_finalsample[df_finalsample$year == 2022, ], model = "within", effect = "twoways")
+
+# View model summary
+summary(cases_stringency_2022)
+
+```
+
+Table 1 - New Daily Cases on Stringency Index:
+
+```{r cases_stringency_table, echo=FALSE}
+
+# Create table from the regressions
+screenreg(list(cases_stringency_2020, cases_stringency_2021, cases_stringency_2022),
+          digits = 4,
+          custom.model.names = c("2020", "2021", "2022"))
+
+```
+
+The analysis reveals that although the coefficient of interest is statistically significant at a 1% level, its value is practically insignificant. The slight positive association between a 1 point increase in the stringency index and approximately 47 additional new daily cases in 2020 and 2021 implies that the impact of government measures on the pandemic is negligible in terms of practical significance, considering the scale of the pandemic.
+
+
+```{r deaths_stringency_2020,include=FALSE, echo=FALSE}
+
+# Fit linear model for year 2020.
+deaths_stringency_2020 <- plm(new_deaths ~ stringency_index, data = df_finalsample[df_finalsample$year == 2020, ], model = "within", effect = "twoways")
+
+# View model summary
+summary(deaths_stringency_2020)
+
+```
+
+```{r deaths_stringency_2021,include=FALSE, echo=FALSE}
+
+# Fit linear model for year 2021.
+deaths_stringency_2021 <- plm(new_deaths ~ stringency_index, data = df_finalsample[df_finalsample$year == 2021, ], model = "within", effect = "twoways")
+
+# View model summary
+summary(deaths_stringency_2021)
+
+```
+
+```{r deaths_stringency_2022,include=FALSE, echo=FALSE}
+
+# Fit linear model for year 2022.
+deaths_stringency_2022 <- plm(new_deaths ~ stringency_index, data = df_finalsample[df_finalsample$year == 2022, ], model = "within", effect = "twoways")
+
+# View model summary
+summary(deaths_stringency_2022)
+
+```
+
+Table 2 - New Daily Deaths on Stringency Index:
+
+```{r deaths_stringency_table, echo=FALSE}
+
+# Create table from the regressions
+screenreg(list(deaths_stringency_2020, deaths_stringency_2021, deaths_stringency_2022),
+          digits = 4,
+          custom.model.names = c("2020", "2021", "2022"))
+
+```
+
+Similar results are observed when considering new daily deaths as the outcome, with a 1-point increase in the stringency index being associated with less than one additional daily death in 2020, 1.5 in 2021 and almost none in 2022. All coefficients were also statistically significant at a 1% level.
+
+The R-Squared statistics of both models are found to be extremely low, indicating that the model has very little predictive power. This is expected given the complexity of the pandemic and the multitude of factors that could influence the relationship between the stringency index and new daily cases and deaths. In order to improve the model's predictive power, it is suggested to include relevant confounding variables.
+
+Deciding which confounding variables to include in a regression is a crucial yet challenging task, especially when attempting to capture any potential causal relationships between two variables. However, as this analysis does not aim to establish causality, some variables that may influence the relationship between the stringency index and new daily cases and deaths will be introduced and their effects on the coefficients will be observed. It is important to note that a more comprehensive analysis of causality may require alternative approaches and considerations.
+
+```{r cases_stringency_2020 confounders,include=FALSE,echo=FALSE}
+
+# Fit linear model for year 2020.
+cases_stringency_2020_conf <- plm(new_cases ~ stringency_index + people_fully_vaccinated + new_tests, 
+                                 data = df_finalsample[df_finalsample$year == 2020, ], model = "within", effect = "twoways")
+
+# View model summary
+summary(cases_stringency_2020_conf)
+
+```
+
+```{r cases_stringency_2021 confounders,include=FALSE,echo=FALSE}
+
+# Fit linear model for year 2021.
+cases_stringency_2021_conf <- plm(new_cases ~ stringency_index + people_fully_vaccinated + new_tests, 
+                                 data = df_finalsample[df_finalsample$year == 2021, ], model = "within", effect = "twoways")
+
+# View model summary
+summary(cases_stringency_2021_conf)
+
+```
+
+```{r cases_stringency_2022 confounders,include=FALSE,echo=FALSE}
+
+# Fit linear model for year 2022.
+cases_stringency_2022_conf <- plm(new_cases ~ stringency_index + people_fully_vaccinated + new_tests, 
+                                 data = df_finalsample[df_finalsample$year == 2022, ], model = "within", effect = "twoways")
+
+# View model summary
+summary(cases_stringency_2022_conf)
+
+```
+
+Table 3 - New Daily Cases on Stringency Index:
+
+```{r cases_stringency_table confounders, echo = FALSE}
+
+# Create table from the regressions
+screenreg(list(cases_stringency_2020_conf, cases_stringency_2021_conf, cases_stringency_2022_conf),
+          digits = 4,
+          custom.model.names = c("2020", "2021", "2022"))
+
+```
+
+Upon including the number of people fully vaccinated and the amount of new daily tests, the analysis reveals a significant change in the results. Notably, the coefficient of the stringency index on the new daily cases loses its significance in 2020, slightly decreases in 2021, and significantly increases in 2022. The coefficients of the added confounding variables exhibit the same pattern in terms of statistical significance, but their values remain extremely low and are practically irrelevant.
+
+```{r deaths_stringency_2020 confounders,include=FALSE,echo=FALSE}
+
+# Fit linear model for year 2020.
+deaths_stringency_2020_conf <- plm(new_deaths ~ stringency_index + people_fully_vaccinated + new_tests,
+                                  data = df_finalsample[df_finalsample$year == 2020, ],
+                                  model = "within", effect = "twoways")
+
+# View model summary
+summary(deaths_stringency_2020_conf)
+
+```
+
+```{r deaths_stringency_2021 confounders,include=FALSE,echo=FALSE}
+
+# Fit linear model for year 2021.
+deaths_stringency_2021_conf <- plm(new_deaths ~ stringency_index + people_fully_vaccinated + new_tests, 
+                                  data = df_finalsample[df_finalsample$year == 2021, ], 
+                                  model = "within", effect = "twoways")
+
+# View model summary
+summary(deaths_stringency_2021_conf)
+
+```
+
+```{r deaths_stringency_2022 confounders,include=FALSE,echo=FALSE}
+
+# Fit linear model for year 2022.
+deaths_stringency_2022_conf <- plm(new_deaths ~ stringency_index + people_fully_vaccinated + new_tests,
+                                  data = df_finalsample[df_finalsample$year == 2022, ], 
+                                  model = "within", effect = "twoways")
+
+# View model summary
+summary(deaths_stringency_2022_conf)
+
+```
+
+Table 4 - New Daily Deaths on Stringency Index:
+
+```{r deaths_stringency_table confounders, echo=FALSE}
+
+# Create table from the regressions
+screenreg(list(deaths_stringency_2020_conf, deaths_stringency_2021_conf, deaths_stringency_2022_conf),
+          digits = 4,
+          custom.model.names = c("2020", "2021", "2022"))
+
+```
+
+Similar observations can be made when examining the relationship between the confounding variables and the outcome of new daily deaths. Notably, the R-Squared slightly increases in both cases upon including these additional variables, as expected. However, it is questionable whether these changes result in significant improvements to the model's predictive power.
+
+It is important to note two things regarding the modeling approach used in this study. Firstly, a linear model was used, despite the fact that the relationship between the variables may not necessarily be linear. The reason for this was primarily to simplify the interpretation and analysis, as this study does not aim to provide a comprehensive examination of the causality between the variables. However, alternative models, such as a Generalized Additive Model using the gam function, could be employed to account for non-linear patterns. Secondly, a "within" model was utilized, accounting in this context for country fixed effects. 
+
+Other modeling decisions could have been considered, and potentially better and more accurate results may have been achieved. However, the goal of this paper is not to provide a definitive analysis but rather to explore some potential relationships between the variables.
+
+## 4.2 Share of Smokers
+
+Another interaction that I intend to investigate is the relationship between COVID-19 deaths and the percentage of smokers in a country. Anecdotal evidence suggests that smokers might have a higher resistance to COVID-19, contrary to initial expectations. For curiosity's sake, I will begin by plotting a world map depicting the distribution of the percentage of smokers across countries.
+
+```{r Map Share of Male Smokers, include=FALSE, echo=FALSE}
+
+# Filter data for 31/12/2021
+df_filtered_map <- df_finalsample %>% 
+  filter(date == "2021-12-31")
+
+# Merge my data and the map data
+df_map <- world %>%
+  left_join(df_filtered_map, by = c("region" = "location"))
+
+# Create plot
+plot_malesmokers <- ggplot(df_map, aes(x = long, y = lat, group = group, fill = male_smokers)) +
+  geom_polygon(color = "blue", linewidth = 0.1) +
+  scale_fill_gradient(low = "green", high = "red",name = "Male Smokers", limits = c(1, 100)) +
+  theme_void() +
+  ggtitle("Share of Male Smokers") +
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "bottom")
+
+plot_malesmokers
+
+```
+
+```{r Map Share of Female Smokers,include=FALSE, echo=FALSE}
+
+# Filter data for 31/12/2021
+df_filtered_map <- df_finalsample %>% 
+  filter(date == "2021-12-31")
+
+# Merge my data and the map data
+df_map <- world %>%
+  left_join(df_filtered_map, by = c("region" = "location"))
+
+# Create plot
+plot_femalesmokers <- ggplot(df_map, aes(x = long, y = lat, group = group, fill = female_smokers)) +
+  geom_polygon(color = "blue", linewidth = 0.1) +
+  scale_fill_gradient(low = "green", high = "red", name = "Female Smokers", limits = c(1, 100)) +
+  theme_void() +
+  ggtitle("Share of Female Smokers") +
+  theme(plot.title = element_text(hjust = 0.5),legend.position = "bottom")
+
+plot_femalesmokers
+
+```
+
+```{r Map Share of Smokers,message=FALSE, echo=FALSE,fig.width=10, fig.height=4}
+
+# Combine plots into one grid
+plot_grid(plot_malesmokers, plot_femalesmokers, nrow = 1)
+
+ggsave("MapShareofSmokers.png")
+
+```
+Several noteworthy observations can be made from the data. Firstly, the proportion of male smokers is generally higher than that of female smokers. Secondly, there are significant variations in the gender distribution of smokers across different countries, which could be attributed to cultural differences. Finally, developed countries tend to exhibit lower smoking rates, although the relationship between the level of development and smoking prevalence is not absolute.
+
+```{r Map Total cases 30th November 2022, echo=FALSE}
+
+# Filter data for 31/12/2021
+df_filtered_map <- df_finalsample %>% 
+  filter(date == "2022-11-30")
+
+# Merge my data and the map data
+df_map <- world %>%
+  left_join(df_filtered_map, by = c("region" = "location"))
+
+# Create function to format numbers in millions
+millions_format <- function(x) {
+  paste0(format(round(x/1e6, 1), nsmall = 1), "M")
+}
+
+# Create plot
+map_totalcases <- ggplot(df_map, aes(x = long, y = lat, group = group, fill = total_cases)) +
+  geom_polygon(color = "blue", linewidth = 0.5) +
+  scale_fill_gradient(low = "green", high = "red", name = "Total Cases",labels = millions_format) +
+  theme_void() +
+  ggtitle("Total cases at 30th November 2022") +
+  theme(plot.title = element_text(hjust = 0.5),legend.position = "right")
+
+```
+
+```{r Map Total Deaths per Million 30th November 2022, echo=FALSE}
+
+# Filter data for 31/12/2021
+df_filtered_map <- df_finalsample %>% 
+  filter(date == "2022-11-30")
+
+# Merge my data and the map data
+df_map <- world %>%
+  left_join(df_filtered_map, by = c("region" = "location"))
+
+# Create plot
+map_totaldeaths <-ggplot(df_map, aes(x = long, y = lat, group = group, fill = total_deaths_per_million)) +
+  geom_polygon(color = "blue", linewidth = 0.5) +
+  scale_fill_gradient(low = "green", high = "red", name = "Total Deaths per Million") +
+  theme_void() +
+  ggtitle("Total Deaths per Million at 30th November 2022") +
+  theme(plot.title = element_text(hjust = 0.5),legend.position = "right")
+
+```
+
+```{r Map Total Cases and Deaths,message=FALSE, echo=FALSE,fig.width=15, fig.height=5}
+
+# Combine plots into one grid
+plot_grid(map_totalcases, map_totaldeaths, nrow = 1)
+
+ggsave("MapTotalCasesandDeaths.png")
+
+```
+
+Having observed the distribution of smokers share accross the world, I then plotted a heat map where I correlate these values with the total deaths of covid per million inhabitants. In the Y-axis I show the share of female smokers, in the X-axist I show the share of Male smokers, and the filling gradient indicates the number of total deaths per million. For that, I created two extra columns in my 
+```{r HeatMap Total Deaths Million and Smokers, message = FALSE, echo=FALSE, fig.width=6, fig.height=4, fig.align = "center"}
+
+# Filter data for the last day of observation in the dataset
+df_filtered <- df_finalsample %>% 
+  filter(date == "2022-11-30")
+
+# Create bins for male and female smokers
+df_filtered$male_smokers_bin <- cut(df_filtered$male_smokers, breaks = seq(0, 100, 20))
+df_filtered$female_smokers_bin <- cut(df_filtered$female_smokers, breaks = seq(0, 100, 20))
+
+# Create a summary data frame with counts by bin. Summing the total_deaths_per_million for each combination of female/male smokers share
+df_heatmap <- aggregate(total_deaths_per_million ~ male_smokers_bin + female_smokers_bin, data = df_filtered, FUN = sum)
+
+# Create the heat map
+ggplot(df_heatmap, aes(x = male_smokers_bin, y = female_smokers_bin, fill = total_deaths_per_million)) +
+  geom_tile() +
+  scale_fill_gradient(low = "green", high = "red", name = "Total Deaths per Million") +
+  xlab("Share of Male Smokers") +
+  ylab("Share of Female Smokers") +
+  ggtitle("Total Deaths Per Million and Share of Smokers (as of 2022-11-30)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate x axis labels for better visibility
+
+ggsave("HeatMapTotalDeathsMillionandSmokers.png")
+
+```
+The heat map indicates a negative correlation between the share of smokers and total deaths per million.Of note, an intriguing pattern emerges from the data, revealing that a high prevalence of smokers from a single gender is associated with a low number of deaths. Conversely, the highest level of deaths occurs with a moderate combination of both male and female smokers. 
+
+Nevertheless, this is a superficial analysis and should not be taken as scientific evidence. The graph serves only a curious purpose and is not suitable for making any inferences or promoting any particular behaviors.
+
+# **5. Code**
+
+One of the most enjoyable codes I learned in class was how to plot maps and fill them with desired variables. I have used this code extensively in my work, as it is a powerful tool in R that enables simple yet meaningful data observation. The code for plotting maps is as follows:
+
+```{r, fig.width=5, fig.height=3, fig.align = "center"}
+# Filter data for 31/12/2021
+df_filtered_map <- df_finalsample %>% 
+  filter(date == "2020-06-01")
+
+# Importing the data of the world map
+world <- map_data("world")
+
+# Merge my data and the map data
+df_map <- world %>%
+  left_join(df_filtered_map, by = c("region" = "location"))
+
+# Create plot
+map_SI_june2020 <- ggplot(df_map, aes(x = long, y = lat, group = group, fill = stringency_index)) +
+  geom_polygon(color = "black",  linewidth = 0.1) +
+  scale_fill_gradient(low = "green", high = "red",name = "Strigency Index",limits = c(1, 100)) +
+  theme_void() +
+  ggtitle("Strigency Index 1st June 2020") +
+  theme(plot.title = element_text(hjust = 0.6), legend.position = "right")
+
+map_SI_june2020
+```
+
+The initial step of the code involves segmenting the sample data at a particular date, thereby enabling a static depiction of the Stringency Index at a specific time point.
+
+```{r}
+
+# Filter data for 31/12/2021
+df_filtered_map <- df_finalsample %>% 
+  filter(date == "2020-06-01")
+
+```
+
+The second block of code involves importing the "world" data from the "maps" package in R. This data includes a column named "region" containing the names of various countries, along with two additional columns "lat" and "long" containing latitude and longitude coordinates for each country. This information can be used to draw the borders of each country on a map.
+
+```{r}
+
+# Importing the data of the world map
+world <- map_data("world")
+
+```
+
+Subsequently, I merge the world dataframe with my sample dataframe. It is convenient that the values in the "region" column of the world data exactly match the values in the "location" column of my original dataset, eliminating the need for any data transformation.
+
+```{r}
+
+# Merge my data and the map data
+df_map <- world %>%
+  left_join(df_filtered_map, by = c("region" = "location"))
+
+```
+
+After merging the datasets containing all the relevant information, I proceed to create a map and fill it with the corresponding data using the ggplot function. To do so, I specify the longitude and latitude values of each region-subregion combination as the X and Y coordinates, respectively, and fill the map with the stringency index variable. In order to convey the idea of "less" and "more" restrictions, I choose to use a gradient from green to red for the fill color. For clarity, I rename the legend "Stringency Index" and set it to always show values between 1 and 100. To achieve a map-like appearance, I use the "theme_void()" function to remove all axis lines, tick marks, and labels. Additionally, I center the title of the plot using ggtitle, and place the legend on the right side of the map.
+
+```{r}
+
+# Create plot
+map_SI_june2020 <- ggplot(df_map, aes(x = long, y = lat, group = group, fill = stringency_index)) +
+  geom_polygon(color = "black",  linewidth = 0.1) +
+  scale_fill_gradient(low = "green", high = "red",name = "Strigency Index", limits = c(1, 100)) +
+  theme_void() +
+  ggtitle("Strigency Index 1st June 2020") +
+  theme(plot.title = element_text(hjust = 0.6), legend.position = "right")
+
+```
+
+In the final step, I created a grid of the four maps I plotted at different points in time. To achieve this, I used the gridExtra package in R and specified that the grid should have two rows and two columns (nrow = 2). This allowed me to arrange the four maps evenly in a 2x2 matrix.
+
+```{r, fig.width=8, fig.height=4, fig.align = "center"}
+
+# Combine plots into one grid
+plot_grid(map_SI_june2020, map_SI_june2021, map_SI_january2022, map_SI_November2022, nrow = 2)
+
+```
+# **6. Conclusion**
+
+The COVID-19 pandemic was a significant life event that, **hopefully**, will not occur again. Nevertheless, it highlighted the importance of data collection and analysis, and the positive impact it can have on people's lives. The data used in this analysis were collected during this process of massive data gathering and allowed for interesting associations to be made between various aspects of the pandemic. Without claiming any causality, it was observed that the correlation between political stringency and pandemic outcomes is not as strong as one might expect. Moreover, it was found that having a high proportion of smokers in a country may not make it particularly susceptible to the virus, which is a curious finding. Whether this is due to smokers' increased resistance to pulmonary infections, smokers dying from tobacco-related illnesses before contracting COVID-19, or a data anomaly requires further investigation and is left to the reader's interpretation.
+
+Finally, this study helped to apply the knowledge gained from the _"Introduction to Data Analysis in R"_ course, strengthening analytical skills and demonstrating R's potential in handling real-world data.
+
